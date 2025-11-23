@@ -1,0 +1,117 @@
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>OpenAI PDF Editor (Full Tool Prototype)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body{font-family: Arial, sans-serif; padding: 20px;}
+    #viewer { border:1px solid #ddd; padding:10px; margin-top:10px; }
+    .controls { margin-bottom: 12px; }
+    .word { display:inline-block; margin:2px; padding:2px 4px; border-radius:3px; background:#f4f4f4; cursor:pointer; }
+    #pages { display:flex; gap:12px; }
+    pre { background:#f7f7f7; padding:8px; border-radius:4px; }
+  </style>
+</head>
+<body>
+  <h1>OpenAI PDF Editor — Full Tool Prototype</h1>
+  <div class="controls">
+    <input type="file" id="file" accept="application/pdf" />
+    <button id="uploadBtn">Upload</button>
+  </div>
+  <div id="status"></div>
+  <div id="viewer"></div>
+  <hr/>
+  <h3>Selected Word / Text Editing</h3>
+  <div>
+    <textarea id="selection" rows="4" cols="80" placeholder="Selected text will appear here"></textarea>
+  </div>
+  <div style="margin-top:8px;">
+    <input id="instruction" placeholder="Instruction for OpenAI (e.g., rewrite concisely, translate to Sinhala)" style="width:60%;" />
+    <button id="aiEditBtn">Send to OpenAI</button>
+  </div>
+  <h4>AI Edited Result</h4>
+  <pre id="aiResult"></pre>
+  <div style="margin-top:10px;">
+    <button id="applyReplacementBtn">Apply as replacement on page (create overlay)</button>
+    <button id="exportBtn">Export Edited PDF</button>
+  </div>
+  <script>
+  let currentFilename = null;
+  let pagesData = null;
+  let currentSelection = { text: '', page: 1 };
+  document.getElementById('uploadBtn').addEventListener('click', async ()=>{
+    const f = document.getElementById('file').files[0];
+    if(!f){ alert('Choose a PDF'); return; }
+    const fd = new FormData();
+    fd.append('file', f);
+    const resp = await fetch('/upload', { method:'POST', body: fd });
+    const j = await resp.json();
+    if(j.filename){ currentFilename = j.filename; document.getElementById('status').innerText = 'Uploaded: '+j.filename; await extract(); }
+    else alert('Upload failed');
+  });
+
+  async function extract(){
+    const resp = await fetch('/extract', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({filename: currentFilename}) });
+    const j = await resp.json();
+    pagesData = j.pages;
+    renderPages();
+  }
+
+  function renderPages(){
+    const viewer = document.getElementById('viewer');
+    viewer.innerHTML = '';
+    pagesData.forEach(p=>{
+      const div = document.createElement('div');
+      div.style.border = '1px solid #ccc'; div.style.padding = '8px'; div.style.marginBottom='8px';
+      const h = document.createElement('h4'); h.innerText = 'Page '+p.page; div.appendChild(h);
+      const wrap = document.createElement('div');
+      p.words.forEach(w=>{
+        const span = document.createElement('span');
+        span.className = 'word';
+        span.innerText = w.text;
+        span.onclick = ()=>{ selectWord(p.page, w); };
+        wrap.appendChild(span);
+      });
+      div.appendChild(wrap);
+      viewer.appendChild(div);
+    });
+  }
+
+  function selectWord(page, word){
+    currentSelection = { text: word.text, page: page, bbox: word };
+    document.getElementById('selection').value = word.text;
+  }
+
+  document.getElementById('aiEditBtn').addEventListener('click', async ()=>{
+    const sel = document.getElementById('selection').value;
+    const instr = document.getElementById('instruction').value || 'Rewrite the text clearly.';
+    if(!sel){ alert('Select some text or type in selection'); return; }
+    const resp = await fetch('/ai_edit', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ filename: currentFilename, page: currentSelection.page, selection_text: sel, instruction: instr }) });
+    const j = await resp.json();
+    if(j.edited_text){ document.getElementById('aiResult').innerText = j.edited_text; }
+    else alert('AI error: '+(j.error||'unknown'));
+  });
+
+  const replacementsStore = {}; // { pageNum: [ {x0, top, bottom, text} ] }
+
+  document.getElementById('applyReplacementBtn').addEventListener('click', ()=>{
+    const edited = document.getElementById('aiResult').innerText || document.getElementById('selection').value;
+    if(!edited) { alert('No edited text to apply'); return; }
+    const page = currentSelection.page || 1;
+    if(!replacementsStore[page]) replacementsStore[page] = [];
+    replacementsStore[page].push({ x0: currentSelection.bbox.x0, top: currentSelection.bbox.top, bottom: currentSelection.bbox.bottom, text: edited });
+    alert('Replacement queued for page '+page);
+    console.log(replacementsStore);
+  });
+
+  document.getElementById('exportBtn').addEventListener('click', async ()=>{
+    if(!currentFilename) { alert('No file'); return; }
+    const resp = await fetch('/apply_replacements', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ filename: currentFilename, replacements: replacementsStore }) });
+    const j = await resp.json();
+    if(j.output){ window.location = '/download/'+j.output; } else alert('Export failed: '+(j.error||'unknown'));
+  });
+  </script>
+</body>
+</html>
