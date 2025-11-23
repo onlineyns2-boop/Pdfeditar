@@ -1,0 +1,6 @@
+flask
+pdfplumber
+pypdf
+reportlab
+openai
+werkzeug
